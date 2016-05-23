@@ -143,6 +143,65 @@ class Program
         }
 
         [TestMethod]
+        public void ArrayReturningMethod()
+        {
+            var test = @"using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Diagnostics;
+
+class Program
+{
+    public int[] GetValues()
+    {
+        return null;
+    }
+}";
+            var expected = new DiagnosticResult
+            {
+                Id = "ReturnAnalyzer",
+                Message = $"null returned",
+                Severity = DiagnosticSeverity.Warning,
+                Locations = new[] { new DiagnosticResultLocation("Test0.cs", 12, 16) }
+            };
+
+            VerifyCSharpDiagnostic(test, expected);
+
+            var fixtest2 = @"using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Diagnostics;
+
+class Program
+{
+    public int[] GetValues()
+    {
+        throw new InvalidOperationException();
+    }
+}";
+            VerifyCSharpFix(test, fixtest2, 0);
+            var fixtest3 = @"using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Diagnostics;
+
+class Program
+{
+    public int[] GetValues()
+    {
+        return new int[0];
+    }
+}";
+            VerifyCSharpFix(test, fixtest3, 1);
+        }
+
+        [TestMethod]
         public void GenericMethod()
         {
             var test = @"using System;

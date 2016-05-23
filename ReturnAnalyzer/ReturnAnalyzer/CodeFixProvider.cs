@@ -54,9 +54,9 @@ namespace ReturnAnalyzer
 
             var enclosingMethodGenericReturnType = enclosingMethodDeclaration as GenericNameSyntax;
 
-            var enclosingMethodReturnType = enclosingMethodDeclaration as PredefinedTypeSyntax;
+            var enclosingMethodReturnType = enclosingMethodDeclaration;
 
-            if (enclosingMethodReturnType?.Keyword.IsKind(SyntaxKind.StringKeyword) == true)
+            if ((enclosingMethodReturnType as PredefinedTypeSyntax)?.Keyword.IsKind(SyntaxKind.StringKeyword) == true)
             {
                 context.RegisterCodeFix(
                    CodeAction.Create(
@@ -70,21 +70,38 @@ namespace ReturnAnalyzer
                 context.RegisterCodeFix(
                     CodeAction.Create(
                         title: $"Return Empty{(enclosingMethodDeclaration.ChildTokens().First())}",
-                        createChangedDocument: c => ReplaceWithEmtpyEnumerableAsync(context.Document, valueProducingNode, c),
+                        createChangedDocument: c => ReplaceWithEmtpyCollectionAsync(context.Document, valueProducingNode, CreateEnumerableDotEmptySyntax, c),
                         equivalenceKey: $"Return Empty{(enclosingMethodDeclaration.ChildTokens().First())}"),
                     diagnostic);
             }
             else
             {
-                var type = GetDeclaredTypeOfEnclosingMethod(root, diagnosticSpan);
-                if (type != null)
+                var returnType = (enclosingMethodGenericReturnType ?? enclosingMethodReturnType as TypeSyntax);
+
+                var returnTypeName = returnType?.GetText()?.ToString();
+
+                var genericType = Type.GetType(returnTypeName);
+                if (returnType is ArrayTypeSyntax)
                 {
                     context.RegisterCodeFix(
                         CodeAction.Create(
-                            title: $"Return Default({(type.ChildNodes().FirstOrDefault(p => p == enclosingMethodDeclaration.FirstAncestorOrSelf<IdentifierNameSyntax>(x => x.IsKind(SyntaxKind.TypeParameter))))})",
-                            createChangedDocument: c => ReturnDefaultOfTResultAsync(context.Document, valueProducingNode, c),
-                            equivalenceKey: $"Return Default({(enclosingMethodDeclaration)})"),
+                            title: $"Use new {(returnType as ArrayTypeSyntax)?.ElementType}[0]",
+                            createChangedDocument: c => ReplaceWithEmtpyCollectionAsync(context.Document, valueProducingNode, CreateEmptyArrayOfTypeCreationSyntax, c),
+                            equivalenceKey: $"Return new {(returnType as ArrayTypeSyntax)?.ElementType}[]"),
                         diagnostic);
+                }
+                else
+                {
+                    var type = GetDeclaredTypeOfEnclosingMethod(root, diagnosticSpan);
+                    if (type != null)
+                    {
+                        context.RegisterCodeFix(
+                            CodeAction.Create(
+                                title: $"Return Default({(type.ChildNodes().FirstOrDefault(p => p == enclosingMethodDeclaration.FirstAncestorOrSelf<IdentifierNameSyntax>(x => x.IsKind(SyntaxKind.TypeParameter))))})",
+                                createChangedDocument: c => ReturnDefaultOfTResultAsync(context.Document, valueProducingNode, c),
+                                equivalenceKey: $"Return Default({(enclosingMethodDeclaration)})"),
+                            diagnostic);
+                    }
                 }
             }
         }
@@ -224,18 +241,22 @@ namespace ReturnAnalyzer
                 .WithAccessorList(AccessorList(SingletonList(AccessorDeclaration(SyntaxKind.GetAccessorDeclaration, Block(ThrowStatement()
                     .WithExpression(ObjectCreationExpression(IdentifierName(nameof(InvalidOperationException))).WithArgumentList(ArgumentList())))))));
 
-        private async Task<Document> ReplaceWithEmtpyEnumerableAsync(Document document, CSharpSyntaxNode returningClause, CancellationToken cancellationToken)
+        private async Task<Document> ReplaceWithEmtpyCollectionAsync(Document document, CSharpSyntaxNode returningClause, Func<SeparatedSyntaxList<TypeSyntax>, ExpressionSyntax> expressionFactory, CancellationToken cancellationToken)
         {
             var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-            var enclosingMethodDeclaration = GetDeclaredTypeOfEnclosingMethod(root, returningClause.Span);
-            var genericReturnTypeArgumwnt = enclosingMethodDeclaration as GenericNameSyntax;
-            var typeArgs = genericReturnTypeArgumwnt.TypeArgumentList;
+            var enclosingMethodType = GetDeclaredTypeOfEnclosingMethod(root, returningClause.Span);
+            var genericReturnTypeArgumwnt = enclosingMethodType as GenericNameSyntax;
+            var typeArgs = genericReturnTypeArgumwnt?.TypeArgumentList?.Arguments ?? SingletonSeparatedList((enclosingMethodType as ArrayTypeSyntax)?.ElementType);
+
+            ExpressionSyntax newValueExpression = expressionFactory(typeArgs);
+
+
             SyntaxNode newRoot;
             var returnStatement = returningClause as ReturnStatementSyntax;
             if (returnStatement != null)
             {
-                var emptyEnumerableExpression = WithEmptyEnumerableOfTypeSyntax(ReturnStatement()
-                                .WithReturnKeyword(returnStatement.ReturnKeyword), typeArgs);
+                var emptyEnumerableExpression = WithEmptyCollectionOfTypeExpressionSyntax(ReturnStatement()
+                                .WithReturnKeyword(returnStatement.ReturnKeyword), newValueExpression);
                 newRoot = root.ReplaceNode(returningClause, emptyEnumerableExpression);
             }
             else
@@ -245,74 +266,45 @@ namespace ReturnAnalyzer
 
                 if (lambda != null)
                 {
-                    var emptyEnumerableExpression = WithEmptyEnumerableOfTypeSyntax(lambda, typeArgs);
+                    var emptyEnumerableExpression = WithEmptyCollectionOfTypeExpressionSyntax(lambda, newValueExpression);
                     newRoot = root.ReplaceNode(returningClause, emptyEnumerableExpression);
                 }
                 else
                 {
                     var arrow = returningClause as ArrowExpressionClauseSyntax;
-                    var emptyEnumerableExpression = WithEmptyEnumerableOfTypeSyntax(arrow, typeArgs);
+                    var emptyEnumerableExpression = WithEmptyCollectionOfTypeExpressionSyntax(arrow, newValueExpression);
                     newRoot = root.ReplaceNode(returningClause, emptyEnumerableExpression);
                 }
             }
             return document.WithSyntaxRoot(newRoot);
         }
 
-        private static CSharpSyntaxNode WithEmptyArrayOfTypeSyntax(CSharpSyntaxNode returningClause, TypeArgumentListSyntax typeArguments)
+        private static CSharpSyntaxNode WithEmptyCollectionOfTypeExpressionSyntax(CSharpSyntaxNode returningClause, ExpressionSyntax expression)
         {
             var returnStatementSyntax = returningClause as ReturnStatementSyntax;
-            var emptyArrayCreationExpressionSyntax = EmptyArrayOfTypeCreationSyntax(typeArguments);
             if (returnStatementSyntax != null)
             {
-                return returnStatementSyntax.WithExpression(emptyArrayCreationExpressionSyntax);
+                return returnStatementSyntax.WithExpression(expression);
             }
 
             var lambdaExpressionSyntax = returningClause as LambdaExpressionSyntax;
             if (lambdaExpressionSyntax != null)
             {
                 return lambdaExpressionSyntax is SimpleLambdaExpressionSyntax
-                    ? SimpleLambdaExpression(((SimpleLambdaExpressionSyntax)lambdaExpressionSyntax).Parameter, emptyArrayCreationExpressionSyntax)
-                    : ParenthesizedLambdaExpression(InvocationExpression(emptyArrayCreationExpressionSyntax)) as LambdaExpressionSyntax;
-            }
-
-            var arrowExpressionClauseSyntax = returningClause as ArrowExpressionClauseSyntax;
-            if (arrowExpressionClauseSyntax != null)
-            {
-                return ArrowExpressionClause(emptyArrayCreationExpressionSyntax);
-            }
-
-            throw new InvalidOperationException("Unknown value clause");
-        }
-
-
-        private static CSharpSyntaxNode WithEmptyEnumerableOfTypeSyntax(CSharpSyntaxNode returningClause, TypeArgumentListSyntax typeArgs)
-        {
-            InvocationExpressionSyntax enumerableDotEmtptyInvocation = CreateEnumerableDotEmptySyntax(typeArgs);
-
-            var returnStatementSyntax = returningClause as ReturnStatementSyntax;
-            if (returnStatementSyntax != null)
-            {
-                return returnStatementSyntax.WithExpression(enumerableDotEmtptyInvocation);
-            }
-
-            var lambdaExpressionSyntax = returningClause as LambdaExpressionSyntax;
-            if (lambdaExpressionSyntax != null)
-            {
-                return lambdaExpressionSyntax is SimpleLambdaExpressionSyntax
-                ? SimpleLambdaExpression((lambdaExpressionSyntax as SimpleLambdaExpressionSyntax).Parameter, enumerableDotEmtptyInvocation)
-                : ParenthesizedLambdaExpression(enumerableDotEmtptyInvocation) as LambdaExpressionSyntax;
+                ? SimpleLambdaExpression((lambdaExpressionSyntax as SimpleLambdaExpressionSyntax).Parameter, expression)
+                : ParenthesizedLambdaExpression(expression) as LambdaExpressionSyntax;
             }
 
             if (returningClause is ArrowExpressionClauseSyntax)
             {
-                return ArrowExpressionClause(enumerableDotEmtptyInvocation);
+                return ArrowExpressionClause(expression);
             }
 
             throw new InvalidOperationException("Unknown value clause");
 
         }
 
-        private static InvocationExpressionSyntax CreateEnumerableDotEmptySyntax(TypeArgumentListSyntax typeArgs) => InvocationExpression(
+        private static InvocationExpressionSyntax CreateEnumerableDotEmptySyntax(SeparatedSyntaxList<TypeSyntax> typeArgs) => InvocationExpression(
             GenericName(
                 Identifier(
                     QualifiedName(
@@ -325,7 +317,7 @@ namespace ReturnAnalyzer
                     )
                     .ToFullString()
                 ),
-            typeArgs)
+            TypeArgumentList(typeArgs))
         );
 
         private static TypeSyntax GetDeclaredTypeOfEnclosingMethod(SyntaxNode root, TextSpan diagnosticSpan) => root.FindToken(diagnosticSpan.Start)
@@ -333,9 +325,9 @@ namespace ReturnAnalyzer
             .Select(x => (x as CSharpSyntaxNode).Accept(new InvocableMemberVisitor()))
             .FirstOrDefault(x => x != null);
 
-        private static ArrayCreationExpressionSyntax EmptyArrayOfTypeCreationSyntax(TypeArgumentListSyntax typeArguments)
+        private static ArrayCreationExpressionSyntax CreateEmptyArrayOfTypeCreationSyntax(SeparatedSyntaxList<TypeSyntax> typeArguments)
         {
-            return ArrayCreationExpression(ArrayType(typeArguments.Arguments[0], SingletonList(ArrayRankSpecifier())));
+            return ArrayCreationExpression(ArrayType(typeArguments[0], SingletonList(ArrayRankSpecifier(SingletonSeparatedList<ExpressionSyntax>(LiteralExpression(SyntaxKind.NumericLiteralExpression, Literal(0)))))));
         }
     }
 
