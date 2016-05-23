@@ -38,7 +38,7 @@ namespace ReturnAnalyzer
             var diagnosticSpan = diagnostic.Location.SourceSpan;
 
             // Find the type return statement identified by the diagnostic.
-            var enclosingMethodDeclaration = GetEnclosingMethodDeclaration(root, diagnosticSpan);
+            var enclosingMethodDeclaration = GetDeclaredTypeOfEnclosingMethod(root, diagnosticSpan);
             var returnStatement = root.FindToken(diagnosticSpan.Start).Parent.AncestorsAndSelf().OfType<ReturnStatementSyntax>().FirstOrDefault();
             var lambda = root.FindToken(diagnosticSpan.Start).Parent.AncestorsAndSelf().OfType<LambdaExpressionSyntax>().FirstOrDefault();
             var arrow = root.FindToken(diagnosticSpan.Start).Parent.AncestorsAndSelf().OfType<ArrowExpressionClauseSyntax>().FirstOrDefault();
@@ -76,7 +76,7 @@ namespace ReturnAnalyzer
             }
             else
             {
-                var type = GetEnclosingMethodDeclaration(root, diagnosticSpan);
+                var type = GetDeclaredTypeOfEnclosingMethod(root, diagnosticSpan);
                 if (type != null)
                 {
                     context.RegisterCodeFix(
@@ -92,7 +92,7 @@ namespace ReturnAnalyzer
         private static async Task<Document> ReturnDefaultOfTResultAsync(Document document, CSharpSyntaxNode returningClause, CancellationToken cancellationToken)
         {
             var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-            var enclosingMethodDeclarationOrLambdaTarget = GetEnclosingMethodDeclaration(root, returningClause.Span);
+            var enclosingMethodDeclarationOrLambdaTarget = GetDeclaredTypeOfEnclosingMethod(root, returningClause.Span);
             var enclosingMethodReturnType = enclosingMethodDeclarationOrLambdaTarget as GenericNameSyntax;
             var defaultExpressionSyntax = DefaultExpression(enclosingMethodDeclarationOrLambdaTarget);
             var defaultExpression = returningClause is ReturnStatementSyntax
@@ -227,14 +227,14 @@ namespace ReturnAnalyzer
         private async Task<Document> ReplaceWithEmtpyEnumerableAsync(Document document, CSharpSyntaxNode returningClause, CancellationToken cancellationToken)
         {
             var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-            var enclosingMethodDeclaration = GetEnclosingMethodDeclaration(root, returningClause.Span);
+            var enclosingMethodDeclaration = GetDeclaredTypeOfEnclosingMethod(root, returningClause.Span);
             var genericReturnTypeArgumwnt = enclosingMethodDeclaration as GenericNameSyntax;
             var typeArgs = genericReturnTypeArgumwnt.TypeArgumentList;
             SyntaxNode newRoot;
             var returnStatement = returningClause as ReturnStatementSyntax;
             if (returnStatement != null)
             {
-                var emptyEnumerableExpression = WithEmptyEnumerableOfTypeExpression(ReturnStatement()
+                var emptyEnumerableExpression = WithEmptyEnumerableOfTypeSyntax(ReturnStatement()
                                 .WithReturnKeyword(returnStatement.ReturnKeyword), typeArgs);
                 newRoot = root.ReplaceNode(returningClause, emptyEnumerableExpression);
             }
@@ -245,39 +245,97 @@ namespace ReturnAnalyzer
 
                 if (lambda != null)
                 {
-                    var emptyEnumerableExpression = WithEmptyEnumerableOfTypeExpression(lambda, typeArgs);
+                    var emptyEnumerableExpression = WithEmptyEnumerableOfTypeSyntax(lambda, typeArgs);
                     newRoot = root.ReplaceNode(returningClause, emptyEnumerableExpression);
                 }
                 else
                 {
                     var arrow = returningClause as ArrowExpressionClauseSyntax;
-                    var emptyEnumerableExpression = WithEmptyEnumerableOfTypeExpression(arrow, typeArgs);
+                    var emptyEnumerableExpression = WithEmptyEnumerableOfTypeSyntax(arrow, typeArgs);
                     newRoot = root.ReplaceNode(returningClause, emptyEnumerableExpression);
                 }
             }
             return document.WithSyntaxRoot(newRoot);
         }
 
-        private static ReturnStatementSyntax WithEmptyEnumerableOfTypeExpression(ReturnStatementSyntax returnStatement, TypeArgumentListSyntax typeArgs)
+        private static CSharpSyntaxNode WithEmptyArrayOfTypeSyntax(CSharpSyntaxNode returningClause, TypeArgumentListSyntax typeArguments)
         {
-            return returnStatement.WithExpression(InvocationExpression(GenericName(Identifier(QualifiedName(IdentifierName(nameof(Enumerable)), IdentifierName(nameof(Enumerable.Empty))).ToFullString()), typeArgs)));
-        }
-        private static LambdaExpressionSyntax WithEmptyEnumerableOfTypeExpression(LambdaExpressionSyntax lambda, TypeArgumentListSyntax typeArgs)
-        {
-            return lambda is SimpleLambdaExpressionSyntax
-                ? SimpleLambdaExpression(((SimpleLambdaExpressionSyntax)lambda).Parameter, InvocationExpression(GenericName(Identifier(QualifiedName(IdentifierName(nameof(Enumerable)), IdentifierName(nameof(Enumerable.Empty))).ToFullString()), typeArgs)))
-                : ParenthesizedLambdaExpression(InvocationExpression(GenericName(Identifier(QualifiedName(IdentifierName(nameof(Enumerable)), IdentifierName(nameof(Enumerable.Empty))).ToFullString()), typeArgs))) as LambdaExpressionSyntax;
+            var returnStatementSyntax = returningClause as ReturnStatementSyntax;
+            var emptyArrayCreationExpressionSyntax = EmptyArrayOfTypeCreationSyntax(typeArguments);
+            if (returnStatementSyntax != null)
+            {
+                return returnStatementSyntax.WithExpression(emptyArrayCreationExpressionSyntax);
+            }
+
+            var lambdaExpressionSyntax = returningClause as LambdaExpressionSyntax;
+            if (lambdaExpressionSyntax != null)
+            {
+                return lambdaExpressionSyntax is SimpleLambdaExpressionSyntax
+                    ? SimpleLambdaExpression(((SimpleLambdaExpressionSyntax)lambdaExpressionSyntax).Parameter, emptyArrayCreationExpressionSyntax)
+                    : ParenthesizedLambdaExpression(InvocationExpression(emptyArrayCreationExpressionSyntax)) as LambdaExpressionSyntax;
+            }
+
+            var arrowExpressionClauseSyntax = returningClause as ArrowExpressionClauseSyntax;
+            if (arrowExpressionClauseSyntax != null)
+            {
+                return ArrowExpressionClause(emptyArrayCreationExpressionSyntax);
+            }
+
+            throw new InvalidOperationException("Unknown value clause");
         }
 
-        private static ArrowExpressionClauseSyntax WithEmptyEnumerableOfTypeExpression(ArrowExpressionClauseSyntax returnStatement, TypeArgumentListSyntax typeArgs)
+
+        private static CSharpSyntaxNode WithEmptyEnumerableOfTypeSyntax(CSharpSyntaxNode returningClause, TypeArgumentListSyntax typeArgs)
         {
-            return ArrowExpressionClause(InvocationExpression(GenericName(Identifier(QualifiedName(IdentifierName(nameof(Enumerable)), IdentifierName(nameof(Enumerable.Empty))).ToFullString()), typeArgs)));
+            InvocationExpressionSyntax enumerableDotEmtptyInvocation = CreateEnumerableDotEmptySyntax(typeArgs);
+
+            var returnStatementSyntax = returningClause as ReturnStatementSyntax;
+            if (returnStatementSyntax != null)
+            {
+                return returnStatementSyntax.WithExpression(enumerableDotEmtptyInvocation);
+            }
+
+            var lambdaExpressionSyntax = returningClause as LambdaExpressionSyntax;
+            if (lambdaExpressionSyntax != null)
+            {
+                return lambdaExpressionSyntax is SimpleLambdaExpressionSyntax
+                ? SimpleLambdaExpression((lambdaExpressionSyntax as SimpleLambdaExpressionSyntax).Parameter, enumerableDotEmtptyInvocation)
+                : ParenthesizedLambdaExpression(enumerableDotEmtptyInvocation) as LambdaExpressionSyntax;
+            }
+
+            if (returningClause is ArrowExpressionClauseSyntax)
+            {
+                return ArrowExpressionClause(enumerableDotEmtptyInvocation);
+            }
+
+            throw new InvalidOperationException("Unknown value clause");
+
         }
 
-        private static TypeSyntax GetEnclosingMethodDeclaration(SyntaxNode root, TextSpan diagnosticSpan)
-        {
+        private static InvocationExpressionSyntax CreateEnumerableDotEmptySyntax(TypeArgumentListSyntax typeArgs) => InvocationExpression(
+            GenericName(
+                Identifier(
+                    QualifiedName(
+                        IdentifierName(
+                            nameof(Enumerable)
+                        ),
+                        IdentifierName(
+                            nameof(Enumerable.Empty)
+                        )
+                    )
+                    .ToFullString()
+                ),
+            typeArgs)
+        );
 
-            return root.FindToken(diagnosticSpan.Start).Parent?.Ancestors().Select(x => (x as CSharpSyntaxNode).Accept(new InvocableMemberVisitor())).FirstOrDefault(x => x != null) as TypeSyntax;
+        private static TypeSyntax GetDeclaredTypeOfEnclosingMethod(SyntaxNode root, TextSpan diagnosticSpan) => root.FindToken(diagnosticSpan.Start)
+            .Parent?.Ancestors()
+            .Select(x => (x as CSharpSyntaxNode).Accept(new InvocableMemberVisitor()))
+            .FirstOrDefault(x => x != null);
+
+        private static ArrayCreationExpressionSyntax EmptyArrayOfTypeCreationSyntax(TypeArgumentListSyntax typeArguments)
+        {
+            return ArrayCreationExpression(ArrayType(typeArguments.Arguments[0], SingletonList(ArrayRankSpecifier())));
         }
     }
 
