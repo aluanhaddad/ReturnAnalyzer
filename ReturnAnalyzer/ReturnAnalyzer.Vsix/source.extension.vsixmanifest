@@ -1,0 +1,33 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0"
+                 xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"
+                 xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Id="ReturnAnalyzer..c9ecb847-518b-4546-a07f-8856ab04e1f5"
+              Version="1.0"
+              Language="en-US"
+              Publisher="Aluan"/>
+    <DisplayName>ReturnAnalyzer</DisplayName>
+    <Description xml:space="preserve">Analyzer which checks for null returns and offers helpful alternatives.</Description>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Version="[14.0,15.0)" Id="Microsoft.VisualStudio.Pro" />
+    <InstallationTarget Version="[14.0,15.0)" Id="Microsoft.VisualStudio.Community" />
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP"
+                DisplayName="Microsoft .NET Framework"
+                d:Source="Manual"
+                Version="[4.5,)" />
+  </Dependencies>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.MefComponent"
+           d:Source="Project"
+           d:ProjectName="ReturnAnalyzer"
+           Path="|ReturnAnalyzer|"/>
+    <Asset Type="Microsoft.VisualStudio.Analyzer"
+           d:Source="Project"
+           d:ProjectName="ReturnAnalyzer"
+           Path="|ReturnAnalyzer|"/>
+  </Assets>
+</PackageManifest>
